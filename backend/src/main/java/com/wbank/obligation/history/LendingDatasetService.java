@@ -39,7 +39,8 @@ public class LendingDatasetService {
 
     public record Row(String decisionId, String obligationNumber, String decision, Instant decidedAt,
                       String policyCode, Integer policyVersion, String snapshotSha256, JsonNode context,
-                      Instant outcomeKnownAt, boolean censored, DecisionContext.Outcome outcome) {}
+                      Instant outcomeKnownAt, boolean censored, DecisionContext.Outcome outcome,
+                      Map<String, Object> informationState) {}
 
     @Transactional(readOnly = true)
     public List<Row> creditDecisions(Duration horizon, Instant knownAt) {
@@ -63,15 +64,39 @@ public class LendingDatasetService {
                     p.hasNonNull("policyVersion") ? p.get("policyVersion").asInt() : null,
                     p.path("snapshotSha256").asText(null), context, outcomeAt, horizonEnd.isAfter(knownAt),
                     approved ? DecisionReconstructionService.outcome(e.getObligationId(), history, e.getLoanSeq(),
-                            decided, outcomeAt) : null));
+                            decided, outcomeAt) : null, informationState(context)));
         }
         return rows;
+    }
+
+    /**
+     * The borrower-information state the decision was taken with, read from the snapshot as
+     * captured. Version-1 snapshots predate it: {@code captured=false}, and nothing is inferred.
+     */
+    static Map<String, Object> informationState(JsonNode context) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        JsonNode info = context == null ? null : context.get("financialInformation");
+        m.put("captured", info != null);
+        if (info == null) {
+            return m;
+        }
+        JsonNode out = info.get("output");
+        m.put("calculationVersion", info.path("calculationVersion").asText());
+        m.put("incomeState", out.at("/income/state").asText());
+        m.put("obligationsState", out.at("/obligations/state").asText());
+        m.put("completeness", out.at("/completeness/status").asText());
+        List<String> missing = new ArrayList<>();
+        out.at("/completeness/missing").forEach(x -> missing.add(x.asText()));
+        m.put("missing", missing);
+        m.put("verifiedIncomeBasis", out.at("/bases/VERIFIED_INCOME/status").asText());
+        m.put("declaredInclusiveBasis", out.at("/bases/DECLARED_INCLUSIVE/status").asText());
+        return m;
     }
 
     /** The dataset as canonical JSON text: identical input, identical bytes. */
     public String canonical(List<Row> rows, Duration horizon, Instant knownAt) {
         Map<String, Object> doc = new LinkedHashMap<>();
-        doc.put("schema", "credit-decision-dataset/v1");
+        doc.put("schema", "credit-decision-dataset/v2"); // v2: rows carry informationState
         doc.put("horizon", horizon.toString());
         doc.put("knownAt", knownAt.toString());
         doc.put("rows", rows);

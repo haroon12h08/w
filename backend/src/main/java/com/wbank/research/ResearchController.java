@@ -33,10 +33,13 @@ public class ResearchController {
     private final PolicyReplayService replays;
     private final ReplayOutcomeEvaluator outcomes;
     private final CreditPolicyService policies;
+    private final InformationResearchService informationResearch;
     private final ObjectMapper json;
 
     public ResearchController(CounterfactualEvaluator evaluator, PolicyReplayService replays,
-                              ReplayOutcomeEvaluator outcomes, CreditPolicyService policies, ObjectMapper json) {
+                              ReplayOutcomeEvaluator outcomes, CreditPolicyService policies,
+                              InformationResearchService informationResearch, ObjectMapper json) {
+        this.informationResearch = informationResearch;
         this.evaluator = evaluator;
         this.replays = replays;
         this.outcomes = outcomes;
@@ -55,6 +58,15 @@ public class ResearchController {
                                         @NotBlank String description) {}
 
     public record CounterfactualView(UUID id, UUID replayId, ActualDecision actual, JsonNode counterfactual) {}
+
+    /** Descriptive information completeness/missingness over credit decisions in a window. */
+    @GetMapping("/information-report")
+    public java.util.Map<String, Object> informationReport(@org.springframework.web.bind.annotation.RequestParam String label,
+            @org.springframework.web.bind.annotation.RequestParam Instant decidedFrom,
+            @org.springframework.web.bind.annotation.RequestParam Instant decidedTo,
+            @org.springframework.web.bind.annotation.RequestParam(required = false) Instant knownAt) {
+        return informationResearch.report(label, decidedFrom, decidedTo, knownAt);
+    }
 
     @PostMapping("/policies")
     public ResponseEntity<JsonNode> publishResearchPolicy(@Valid @RequestBody ResearchPolicyRequest req) {
