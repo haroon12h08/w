@@ -38,9 +38,25 @@ public class SnapshotDecisionFacts implements DecisionFactsSource {
                 settlementAvailable = a.get("availableMinor").asLong();
             }
         }
+        // Version-2 snapshots carry the financial-information section; version-1 snapshots do not,
+        // and their facts must not silently gain it (these stay null and are omitted).
+        JsonNode info = s.path("financialInformation");
+        Long verifiedIncome = null;
+        Long ratio = null;
+        String completeness = null;
+        if (!info.isMissingNode() && !info.isNull()) {
+            JsonNode verifiedBasis = info.at("/output/bases/VERIFIED_INCOME");
+            verifiedIncome = longOrNull(info.at("/output/income/verifiedMonthlyMinor"));
+            ratio = longOrNull(verifiedBasis.path("debtServiceRatioBps"));
+            completeness = info.at("/output/completeness/status").asText(null);
+        }
         return new DecisionFacts(s.at("/subject/customerStatus").asText(null), currency,
                 currencies.require(currency).minorUnit(), s.at("/application/principalMinor").asLong(),
                 s.at("/application/installmentCount").asLong(), s.at("/application/annualRateBps").asLong(),
-                anyDefaulted, maxDpd, settlementAvailable, null);
+                anyDefaulted, maxDpd, settlementAvailable, null, verifiedIncome, ratio, completeness);
+    }
+
+    private static Long longOrNull(JsonNode n) {
+        return n == null || n.isMissingNode() || n.isNull() ? null : n.asLong();
     }
 }

@@ -13,7 +13,10 @@ import org.springframework.transaction.annotation.Transactional;
 @Component
 public class DecisionSnapshots {
 
-    public static final String SCHEMA = "credit-decision-snapshot/v1";
+    /** Phase 5-6 snapshots. Never rewritten; they remain valid version-1 snapshots forever. */
+    public static final String SCHEMA_V1 = "credit-decision-snapshot/v1";
+    /** Phase 7: adds the financialInformation section (facts, provenance, affordability, completeness). */
+    public static final String SCHEMA = "credit-decision-snapshot/v2";
 
     private final CreditDecisionSnapshotRepository snapshots;
     private final ObjectMapper json;

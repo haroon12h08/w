@@ -11,18 +11,30 @@ import java.util.List;
  *
  * @param minSettlementAvailableMajor optional (added in V11): minimum available balance on the
  *                                    settlement account at decision time
+ * @param maxDebtServiceRatioBps      optional (Phase 7): maximum debt-service ratio on verified income;
+ *                                    INDETERMINATE when the snapshot has no determinate verified basis
+ * @param requireCompleteInformation  optional (Phase 7): the affordability information must be COMPLETE
  */
 public record CreditPolicyRules(boolean requireActiveCustomer, long maxPrincipalMajor, int maxInstallments,
                                 int maxAnnualRateBps, boolean blockIfAnyObligationDefaulted,
                                 long maxExistingDaysPastDue, long defaultDeclarationMinDaysPastDue,
-                                Long minSettlementAvailableMajor) {
+                                Long minSettlementAvailableMajor, Long maxDebtServiceRatioBps,
+                                Boolean requireCompleteInformation) {
+
+    /** Constructor for policies without the Phase 7 information rules. */
+    public CreditPolicyRules(boolean requireActiveCustomer, long maxPrincipalMajor, int maxInstallments,
+                             int maxAnnualRateBps, boolean blockIfAnyObligationDefaulted, long maxExistingDaysPastDue,
+                             long defaultDeclarationMinDaysPastDue, Long minSettlementAvailableMajor) {
+        this(requireActiveCustomer, maxPrincipalMajor, maxInstallments, maxAnnualRateBps, blockIfAnyObligationDefaulted,
+                maxExistingDaysPastDue, defaultDeclarationMinDaysPastDue, minSettlementAvailableMajor, null, null);
+    }
 
     /** Backwards-compatible constructor for policies without the optional rule. */
     public CreditPolicyRules(boolean requireActiveCustomer, long maxPrincipalMajor, int maxInstallments,
                              int maxAnnualRateBps, boolean blockIfAnyObligationDefaulted, long maxExistingDaysPastDue,
                              long defaultDeclarationMinDaysPastDue) {
         this(requireActiveCustomer, maxPrincipalMajor, maxInstallments, maxAnnualRateBps,
-                blockIfAnyObligationDefaulted, maxExistingDaysPastDue, defaultDeclarationMinDaysPastDue, null);
+                blockIfAnyObligationDefaulted, maxExistingDaysPastDue, defaultDeclarationMinDaysPastDue, null, null, null);
     }
 
     /** The approval rules, in a fixed order. Money thresholds are converted to minor units exactly. */
@@ -46,6 +58,14 @@ public record CreditPolicyRules(boolean requireActiveCustomer, long maxPrincipal
         if (minSettlementAvailableMajor != null) {
             r.add(new PolicyRule("SETTLEMENT_AVAILABLE_AT_LEAST", PolicyRule.Input.SETTLEMENT_AVAILABLE_MINOR,
                     PolicyRule.Operator.GTE, minor(minSettlementAvailableMajor, currencyScale)));
+        }
+        if (maxDebtServiceRatioBps != null) {
+            r.add(new PolicyRule("DEBT_SERVICE_RATIO_WITHIN_LIMIT", PolicyRule.Input.DEBT_SERVICE_RATIO_BPS,
+                    PolicyRule.Operator.LTE, maxDebtServiceRatioBps));
+        }
+        if (Boolean.TRUE.equals(requireCompleteInformation)) {
+            r.add(new PolicyRule("INFORMATION_COMPLETE", PolicyRule.Input.INFORMATION_COMPLETENESS,
+                    PolicyRule.Operator.EQ, "COMPLETE"));
         }
         return List.copyOf(r);
     }

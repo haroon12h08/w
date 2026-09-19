@@ -150,9 +150,9 @@ class V11CounterfactualMigrationTest extends PostgresIntegrationTest {
         String sha = written[1];
 
         String before = fingerprint();
-        Flyway.configure().dataSource(ds).schemas(schema).locations("classpath:db/migration").load().migrate();
-        assertThat(jdbc.queryForObject("SELECT max(version::int) FROM flyway_schema_history WHERE success", Integer.class))
-                .isEqualTo(11);
+        Flyway.configure().dataSource(ds).schemas(schema).locations("classpath:db/migration").target("11").load().migrate();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM flyway_schema_history WHERE success AND version = '11'",
+                Integer.class)).isEqualTo(1);
         // 1. Nothing in the banking record changed.
         assertThat(fingerprint()).isEqualTo(before);
         assertThat(jdbc.queryForObject("SELECT count(*) FROM research_counterfactual_decision", Long.class)).isZero();

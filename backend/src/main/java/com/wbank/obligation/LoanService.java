@@ -39,6 +39,8 @@ import com.wbank.obligation.persistence.RepaymentAllocationRepository;
 import com.wbank.obligation.persistence.RepaymentRepository;
 import com.wbank.customer.CustomerService;
 import com.wbank.customer.domain.Customer;
+import com.wbank.information.AffordabilityCalculator;
+import com.wbank.information.AffordabilityService;
 import com.wbank.obligation.history.CreditPolicy;
 import com.wbank.obligation.history.CreditPolicyRules;
 import com.wbank.obligation.history.DecisionFacts;
@@ -116,6 +118,7 @@ public class LoanService {
     private final DecisionSnapshots snapshots;
     private final PartyService parties;
     private final CustomerService customers;
+    private final AffordabilityService affordability;
 
     public LoanService(ObligationRepository obligations, LoanTermsRepository terms, InstallmentRepository installments,
                        RepaymentRepository repayments, RepaymentAllocationRepository allocations,
@@ -124,7 +127,9 @@ public class LoanService {
                        AccountService accounts, FundsService funds, ProductService products, LedgerService ledger,
                        CurrencyRegistry currencies, SequenceNumbers sequenceNumbers, AuditTrail auditTrail,
                        ObjectMapper json, Clock clock, LendingHistory history, CreditPolicyService policies,
-                       DecisionSnapshots snapshots, PartyService parties, CustomerService customers) {
+                       DecisionSnapshots snapshots, PartyService parties, CustomerService customers,
+                       AffordabilityService affordability) {
+        this.affordability = affordability;
         this.history = history;
         this.policies = policies;
         this.snapshots = snapshots;
@@ -736,7 +741,8 @@ public class LoanService {
     /** The policy in force at decision time, its rule results, and the facts they were evaluated on. */
     private record DecisionBasis(CreditPolicy policy, CreditPolicyRules rules,
                                  List<PolicyEngine.RuleResult> results, Customer customer, Party party,
-                                 List<Map<String, Object>> existingObligations, Map<String, Object> subjectLoan) {}
+                                 List<Map<String, Object>> existingObligations, Map<String, Object> subjectLoan,
+                                 AffordabilityService.Computed information) {}
 
     private DecisionBasis decisionBasis(Obligation o, LoanDecision.Kind kind) {
         LocalDate today = LocalDate.now(clock);
@@ -746,6 +752,14 @@ public class LoanService {
         Customer customer = customers.require(position.getCustomerId());
         Party party = parties.require(o.getDebtorPartyId());
         List<Map<String, Object>> existing = existingObligations(o, today);
+        // The financial information the bank holds right now (i.e. at decision time), with the
+        // loan under decision as the proposal and excluded from existing internal obligations.
+        LoanTerms terms = requireTerms(o.getId());
+        Instant now = clock.instant();
+        AffordabilityService.Computed information = affordability.compute(party.getId(),
+                new AffordabilityService.Proposal(o.getCurrencyCode(), o.getPrincipalMinor(), terms.getAnnualRateBps(),
+                        terms.getInstallmentCount()), now, now, o.getId());
+        Map<String, Object> verifiedBasis = information.basis("VERIFIED_INCOME");
         Map<String, Object> subjectLoan = null;
         List<PolicyEngine.RuleResult> results;
         if (kind == LoanDecision.Kind.DEFAULT_DECLARED) {
@@ -764,9 +778,10 @@ public class LoanService {
                     (long) t.getInstallmentCount(), (long) t.getAnnualRateBps(),
                     existing.stream().anyMatch(e -> "DEFAULTED".equals(e.get("status"))),
                     existing.stream().mapToLong(e -> (Long) e.get("daysPastDue")).max().orElse(0),
-                    settlementAvailable, null)).results();
+                    settlementAvailable, null, (Long) verifiedBasis.get("incomeMonthlyMinor"),
+                    (Long) verifiedBasis.get("debtServiceRatioBps"), information.completeness())).results();
         }
-        return new DecisionBasis(policy, rules, results, customer, party, existing, subjectLoan);
+        return new DecisionBasis(policy, rules, results, customer, party, existing, subjectLoan, information);
     }
 
     /** The debtor's other obligations as they stand now (i.e. at decision time), from live state. */
@@ -830,6 +845,7 @@ public class LoanService {
             throw new IllegalStateException(e);
         }
 
+        affordability.record(o.getDebtorPartyId(), o.getId(), "DECISION", basis.information());
         CreditDecisionSnapshot snapshot = snapshots.capture(decision.getId(), o.getId(), basis.policy(), now,
                 snapshotContent(o, kind, rationale, supplied, basis, ruleResults, from, context, now));
 
@@ -929,6 +945,20 @@ public class LoanService {
         action.put("fromStatus", from.name());
         action.put("toStatus", o.getStatus().name());
         c.put("resultingAction", action);
+
+        // Version 2: what the bank knew about the borrower's finances at this moment, with provenance,
+        // the exact affordability input (normalised), its output, and both hashes.
+        AffordabilityService.Computed info = basis.information();
+        Map<String, Object> financial = new LinkedHashMap<>();
+        financial.put("calculationVersion", AffordabilityCalculator.VERSION);
+        financial.put("asOf", info.input().asOf().toString());
+        financial.put("knownAt", info.input().knownAt().toString());
+        financial.put("visibleObservations", affordability.tree(info.visibleObservations()));
+        financial.put("input", affordability.tree(info.input()));
+        financial.put("inputHash", info.inputHash());
+        financial.put("output", info.output());
+        financial.put("outputHash", info.outputHash());
+        c.put("financialInformation", financial);
         return c;
     }
 

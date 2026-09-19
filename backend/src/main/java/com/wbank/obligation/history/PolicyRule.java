@@ -21,7 +21,13 @@ public record PolicyRule(String id, Input input, Operator operator, Object thres
         ANY_EXISTING_OBLIGATION_DEFAULTED,
         MAX_EXISTING_DAYS_PAST_DUE,
         SETTLEMENT_AVAILABLE_MINOR,
-        SUBJECT_DAYS_PAST_DUE
+        SUBJECT_DAYS_PAST_DUE,
+        /** Verified income per month (AFFORDABILITY_V1); version-2 snapshots only. */
+        VERIFIED_MONTHLY_INCOME_MINOR,
+        /** Debt-service ratio on the VERIFIED_INCOME basis; null when that basis is indeterminate. */
+        DEBT_SERVICE_RATIO_BPS,
+        /** COMPLETE / PARTIAL / INSUFFICIENT for AFFORDABILITY_V1; version-2 snapshots only. */
+        INFORMATION_COMPLETENESS
     }
 
     public enum Operator { EQ, LTE, GTE, IS_FALSE }

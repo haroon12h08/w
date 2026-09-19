@@ -339,10 +339,14 @@ class CounterfactualIntegrationTest extends PostgresIntegrationTest {
         assertThat(fieldNames(input)).containsExactlyInAnyOrder("schema", "source", "facts", "policy");
         assertThat(fieldNames(input.get("source"))).containsExactlyInAnyOrder("decisionId", "snapshotId",
                 "snapshotSha256", "decidedAt", "actualDecision", "actualPolicyCode", "actualPolicyVersion");
-        assertThat(fieldNames(input.get("facts"))).containsExactlyInAnyOrder("customerStatus", "currency",
-                "currencyScale", "principalMinor", "installmentCount", "annualRateBps",
-                "anyExistingObligationDefaulted", "maxExistingDaysPastDue", "settlementAvailableMinor",
-                "subjectDaysPastDue");
+        // Version-1 fields always; a version-2 snapshot (Phase 7) may add only the information fields,
+        // and only when they are known (an absent fact is omitted, never defaulted).
+        List<String> v1Fields = List.of("customerStatus", "currency", "currencyScale", "principalMinor",
+                "installmentCount", "annualRateBps", "anyExistingObligationDefaulted", "maxExistingDaysPastDue",
+                "settlementAvailableMinor", "subjectDaysPastDue");
+        assertThat(fieldNames(input.get("facts"))).containsAll(v1Fields);
+        assertThat(fieldNames(input.get("facts"))).filteredOn(fname -> !v1Fields.contains(fname))
+                .isSubsetOf("verifiedMonthlyIncomeMinor", "debtServiceRatioBps", "informationCompleteness");
         // The subject's own later state never appears; subjectDaysPastDue is for default decisions only.
         assertThat(input.at("/facts/subjectDaysPastDue").isNull()).isTrue();
         // No outcome-bearing value appears among the facts (rule ids such as NO_DEFAULTED_OBLIGATIONS are policy text).
@@ -466,7 +470,8 @@ class CounterfactualIntegrationTest extends PostgresIntegrationTest {
             UUID settlement = UUID.fromString(src.snapshot().at("/application/settlementAccountId").asText());
             return new DecisionFacts(customers.require(customer).getStatus().name(), s.currency(), s.currencyScale(),
                     s.principalMinor(), s.installmentCount(), s.annualRateBps(), anyDefaulted, maxDpd,
-                    funds.balances(settlement).availableMinor(), null);
+                    funds.balances(settlement).availableMinor(), null, s.verifiedMonthlyIncomeMinor(),
+                    s.debtServiceRatioBps(), s.informationCompleteness());
         };
     }
 
@@ -493,7 +498,8 @@ class CounterfactualIntegrationTest extends PostgresIntegrationTest {
             maxDpd = Math.max(maxDpd, h.derivedDelinquency() == null ? 0 : h.derivedDelinquency().daysPastDue());
         }
         return new DecisionFacts(s.customerStatus(), s.currency(), s.currencyScale(), s.principalMinor(),
-                s.installmentCount(), s.annualRateBps(), anyDefaulted, maxDpd, s.settlementAvailableMinor(), null);
+                s.installmentCount(), s.annualRateBps(), anyDefaulted, maxDpd, s.settlementAvailableMinor(), null,
+                s.verifiedMonthlyIncomeMinor(), s.debtServiceRatioBps(), s.informationCompleteness());
     }
 
     /** Scenario: a fact recorded long after G's decision, but back-dated to before it. */
