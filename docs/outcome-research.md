@@ -177,7 +177,13 @@ The report contains no evaluation-time field, so repeated evaluation over unchan
 `GET /outcome-reports/{id}/reproduction` rebuilds the report and compares both hashes.
 Tests show that moving an outcome event inside the window changes the result, and moving one outside the window does not.
 
-## 12. Statistical limitations
+## 12. Timestamp precision
+
+A live check found that a report computed from a nanosecond clock could not be reproduced from its
+stored (microsecond) cutoff. Instants that are stored and computed with are now normalized first
+(`platform/time/DatabaseTime`); see [research-sensitivity.md](research-sensitivity.md) §9.
+
+## 13. Statistical limitations
 
 - Descriptive only. The report provides no regression, survival model, propensity score, uplift, Bayesian model or machine learning.
 - Small groups make proportions unstable, and nothing here quantifies uncertainty.
