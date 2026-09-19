@@ -14,12 +14,12 @@ import com.wbank.obligation.history.LoanHistoryFold;
 import com.wbank.obligation.history.PointInTimeService;
 import com.wbank.platform.context.RequestContext;
 import com.wbank.platform.error.NotFoundException;
+import com.wbank.platform.time.DatabaseTime;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.sql.Timestamp;
 import java.time.Clock;
 import java.time.Instant;
-import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -63,6 +63,16 @@ public class OutcomeResearchService {
     /** Where a member's decision-time information state comes from. The correct source is the snapshot. */
     public interface InformationSource {
         Map<String, Object> state(UUID decisionId, UUID partyId, Instant decidedAt, JsonNode snapshot);
+    }
+
+    /**
+     * A research definition's stored hash (written once, when it was created) and the hash of
+     * its content as it is now. They differ only if the append-only table was bypassed.
+     */
+    public record DefinitionHashes(String kind, String code, int version, String storedHash, String contentHash) {
+        public boolean intact() {
+            return storedHash.equals(contentHash);
+        }
     }
 
     public record Reproduction(UUID reportId, String storedPopulationHash, String recomputedPopulationHash,
@@ -142,7 +152,7 @@ public class OutcomeResearchService {
                                          String description) {
         String c = requireCode(code);
         Instant now = now();
-        Instant k = knownAt == null ? now : knownAt.truncatedTo(ChronoUnit.MICROS);
+        Instant k = knownAt == null ? now : DatabaseTime.normalize(knownAt);
         if (k.isAfter(now)) {
             throw new IllegalArgumentException("A cohort's knowledge cutoff cannot be in the future: membership "
                     + "must never change after the cohort is defined");
@@ -220,13 +230,23 @@ public class OutcomeResearchService {
             members.add(new Member(new OutcomeEvaluator.Subject(decisionId, e.getObligationId(), decision,
                     e.getEffectiveAt(), e.getLoanSeq(), history), snap == null ? null : snap.getContentSha256(), state));
         }
+        return membershipOf(c, members, excluded, json);
+    }
+
+    /**
+     * A membership and its hashes from already-selected members (pure). Used by {@link #membership}
+     * and by migration regressions that rebuild a membership from an isolated schema.
+     */
+    public static Membership membershipOf(CohortDefinition c, List<Member> members, List<Map<String, Object>> excluded,
+                                          ObjectMapper json) {
         List<Map<String, Object>> population = members.stream().map(OutcomeResearchService::memberJson).toList();
         return new Membership(c, CanonicalJson.sha256(CanonicalJson.canonical(json, json.valueToTree(cohortJson(c)))),
                 List.copyOf(members), List.copyOf(excluded),
                 CanonicalJson.sha256(CanonicalJson.canonical(json, json.valueToTree(population))));
     }
 
-    static Map<String, Object> snapshotState(JsonNode snapshot) {
+    /** The information state as captured in a decision snapshot; NOT_CAPTURED for version 1. */
+    public static Map<String, Object> snapshotState(JsonNode snapshot) {
         Map<String, Object> m = new LinkedHashMap<>();
         JsonNode info = snapshot == null ? null : snapshot.get("financialInformation");
         m.put("captured", info != null);
@@ -711,7 +731,8 @@ public class OutcomeResearchService {
 
     // ================================================================== helpers
 
-    private static Map<String, Object> cohortJson(CohortDefinition c) {
+    /** The stored JSON of a cohort definition. */
+    public static Map<String, Object> cohortJson(CohortDefinition c) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("code", c.code());
         m.put("version", c.version());
@@ -729,16 +750,13 @@ public class OutcomeResearchService {
         return m;
     }
 
-    /**
-     * The bank's clock at the database's precision (microseconds), read once per operation, so a
-     * stored instant and the instant a report was computed from are the same instant.
-     */
+    /** Read once per operation, at database precision (see {@link DatabaseTime}). */
     private Instant now() {
-        return clock.instant().truncatedTo(ChronoUnit.MICROS);
+        return DatabaseTime.now(clock);
     }
 
     private Instant requireKnowable(Instant knownAt, Instant now) {
-        Instant k = knownAt == null ? now : knownAt.truncatedTo(ChronoUnit.MICROS);
+        Instant k = knownAt == null ? now : DatabaseTime.normalize(knownAt);
         if (k.isAfter(now)) {
             throw new IllegalArgumentException("Knowledge cannot be taken from the future: knownAt " + k + " > now");
         }
@@ -766,6 +784,26 @@ public class OutcomeResearchService {
         jdbc.update("INSERT INTO " + table + " (code, version, definition, definition_hash, created_at, created_by) "
                         + "VALUES (?, ?, ?::jsonb, ?, ?, ?)", code, version, canonical, CanonicalJson.sha256(canonical),
                 Timestamp.from(now), RequestContext.forOperation("research.define").actor());
+    }
+
+    @Transactional(readOnly = true)
+    public DefinitionHashes outcomeDefinitionHashes(String code, int version) {
+        return definitionHashes("research_outcome_definition", "OUTCOME", code, version);
+    }
+
+    @Transactional(readOnly = true)
+    public DefinitionHashes cohortDefinitionHashes(String code, int version) {
+        return definitionHashes("research_cohort_definition", "COHORT", code, version);
+    }
+
+    private DefinitionHashes definitionHashes(String table, String kind, String code, int version) {
+        List<Map<String, Object>> rows = jdbc.queryForList("SELECT definition::text AS d, definition_hash FROM " + table
+                + " WHERE code = ? AND version = ?", code, version);
+        if (rows.isEmpty()) {
+            throw new NotFoundException("research_definition.not_found", table + " " + code + " v" + version + " does not exist");
+        }
+        String content = CanonicalJson.sha256(CanonicalJson.canonical(json, read((String) rows.get(0).get("d"))));
+        return new DefinitionHashes(kind, code, version, (String) rows.get(0).get("definition_hash"), content);
     }
 
     private JsonNode readDefinition(String table, String code, int version) {
