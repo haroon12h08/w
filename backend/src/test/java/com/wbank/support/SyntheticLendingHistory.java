@@ -57,7 +57,22 @@ public class SyntheticLendingHistory {
         }
     }
 
+    /**
+     * Optional borrower financial information layered onto the history. Phase 5/6 runs pass none
+     * and are unchanged. {@code beforeDecisions} runs at 09:30 on the decision day (visible to the
+     * 10:00 decisions); {@code afterDecisions} at 10:30 (recorded after them, before disbursement).
+     */
+    public interface Information {
+        void beforeDecisions(Map<String, UUID> partyIds, Instant decisionsAt);
+
+        void afterDecisions(Map<String, UUID> partyIds, Instant decisionsAt);
+    }
+
     public Run generate(LocalDate base) {
+        return generate(base, null);
+    }
+
+    public Run generate(LocalDate base, Information information) {
         Map<String, Instant> milestones = new LinkedHashMap<>();
         at(base, 8);
         Map<String, Customer> customers = new LinkedHashMap<>();
@@ -79,6 +94,14 @@ public class SyntheticLendingHistory {
                     d.money(terms[i][0], "USD"), 1_200, (int) terms[i][1]));
         }
 
+        Instant decisionsAt = base.atTime(10, 0).toInstant(ZoneOffset.UTC);
+        Map<String, UUID> partyIds = new LinkedHashMap<>();
+        customers.forEach((k, c) -> partyIds.put(k, c.getPartyId()));
+        if (information != null) {
+            clock.set(decisionsAt.minusSeconds(1_800));
+            information.beforeDecisions(partyIds, decisionsAt);
+        }
+
         at(base, 10);
         milestones.put("decisions", clock.instant());
         Map<String, Story> stories = new LinkedHashMap<>();
@@ -89,6 +112,11 @@ public class SyntheticLendingHistory {
         }
         loans.decline(apps.get("F").getId(), "affordability not demonstrated", Map.of("declaredMonthlyIncome", "900.00"));
         stories.put("F", story("F", apps.get("F").getId(), LoanDecision.Kind.DECLINED));
+
+        if (information != null) {
+            clock.set(decisionsAt.plusSeconds(1_800));
+            information.afterDecisions(partyIds, decisionsAt);
+        }
 
         at(base, 11);
         for (String s : new String[] {"A", "B", "C", "D", "E"}) {
