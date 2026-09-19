@@ -161,6 +161,28 @@ public class OutcomeEvaluator {
                 hit == null ? "NO_QUALIFYING_EVENT_WITHIN_HORIZON" : hit.type().name(), corrections);
     }
 
+    /**
+     * A reference to the qualifying event already known within {@code (decidedAt, decidedAt + H]}
+     * at {@code knownAt}, whether or not the window is complete; null if none (or declined).
+     *
+     * <p>Not an outcome status: a window that is still open stays CENSORED in {@link #evaluate},
+     * because counting early events while ignoring open windows without one would bias every
+     * proportion. It exists so sensitivity analysis can show that a known event never
+     * disappears when a horizon is lengthened or a knowledge cutoff is moved later.
+     */
+    public String knownEvent(Definition d, Subject s, Instant knownAt) {
+        if (!"APPROVED".equals(s.decision())) {
+            return null;
+        }
+        Instant cutoff = outcomeCutoff(s.decidedAt(), d, knownAt);
+        if (d.event() == Event.DELINQUENCY_DERIVED) {
+            Instant end = cutoff.isBefore(knownAt) ? cutoff : knownAt;
+            return maxDaysPastDue(s, end, knownAt) >= d.thresholdDaysPastDue() ? "DERIVED_DPD_THRESHOLD_REACHED" : null;
+        }
+        LoanHistoryFold.Event hit = firstQualifying(d, s, cutoff, knownAt);
+        return hit == null ? null : hit.type().name() + ":" + hit.id();
+    }
+
     /** Corrections to this loan's post-decision events that were known at {@code knownAt}. */
     List<Map<String, Object>> corrections(Subject s, Instant knownAt) {
         List<Map<String, Object>> out = new ArrayList<>();
