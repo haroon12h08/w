@@ -1,0 +1,35 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: wbank-postgres
+    environment:
+      POSTGRES_DB: wbank
+      POSTGRES_USER: wbank
+      POSTGRES_PASSWORD: wbank
+      # Deterministic, UTC-only server. Financial timestamps are stored as
+      # timestamptz; the server must never guess a local zone.
+      PGTZ: UTC
+      TZ: UTC
+    command:
+      - postgres
+      - -c
+      - timezone=UTC
+      # Serialisable-capable engine settings; the application uses READ COMMITTED
+      # plus explicit row locks, but we keep statement timeouts tight so that a
+      # stuck financial transaction fails fast instead of holding ledger locks.
+      - -c
+      - statement_timeout=15000
+      - -c
+      - idle_in_transaction_session_timeout=30000
+    ports:
+      - "5432:5432"
+    volumes:
+      - wbank-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wbank -d wbank"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  wbank-pgdata:

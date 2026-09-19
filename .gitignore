@@ -1,0 +1,22 @@
+# Java
+target/
+*.class
+
+# Maven
+.mvn/
+
+# Node
+node_modules/
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+
+# Logs
+*.log
+
+# Environment
+.env
