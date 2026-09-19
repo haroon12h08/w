@@ -1,57 +1,70 @@
 package com.wbank.obligation.history;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 
 /**
- * The typed content of a credit policy version, and its evaluation. Every rule is explicit,
- * deterministic and reports what it observed against what threshold, so a decision can be
- * explained later exactly as it was evaluated.
+ * The stored parameters of a credit policy version (the JSON in {@code credit_policy.rules}).
+ * They compile, deterministically, into explicit {@link PolicyRule}s; evaluation is done by
+ * {@link PolicyEngine}. Optional parameters (null) produce no rule.
+ *
+ * @param minSettlementAvailableMajor optional (added in V11): minimum available balance on the
+ *                                    settlement account at decision time
  */
 public record CreditPolicyRules(boolean requireActiveCustomer, long maxPrincipalMajor, int maxInstallments,
                                 int maxAnnualRateBps, boolean blockIfAnyObligationDefaulted,
-                                long maxExistingDaysPastDue, long defaultDeclarationMinDaysPastDue) {
+                                long maxExistingDaysPastDue, long defaultDeclarationMinDaysPastDue,
+                                Long minSettlementAvailableMajor) {
 
-    public record RuleResult(String rule, boolean passed, Object observed, Object threshold) {
-        public Map<String, Object> asMap() {
-            Map<String, Object> m = new LinkedHashMap<>();
-            m.put("rule", rule);
-            m.put("passed", passed);
-            m.put("observed", observed);
-            m.put("threshold", threshold);
-            return m;
-        }
+    /** Backwards-compatible constructor for policies without the optional rule. */
+    public CreditPolicyRules(boolean requireActiveCustomer, long maxPrincipalMajor, int maxInstallments,
+                             int maxAnnualRateBps, boolean blockIfAnyObligationDefaulted, long maxExistingDaysPastDue,
+                             long defaultDeclarationMinDaysPastDue) {
+        this(requireActiveCustomer, maxPrincipalMajor, maxInstallments, maxAnnualRateBps,
+                blockIfAnyObligationDefaulted, maxExistingDaysPastDue, defaultDeclarationMinDaysPastDue, null);
     }
 
-    /** What the approval rules look at, as known at decision time. */
-    public record ApprovalFacts(String customerStatus, long principalMinor, int currencyScale, int installmentCount,
-                                int annualRateBps, boolean anyObligationDefaulted, long maxExistingDaysPastDue) {}
-
-    public List<RuleResult> evaluateApproval(ApprovalFacts f) {
-        long maxPrincipalMinor = Math.multiplyExact(maxPrincipalMajor, (long) Math.pow(10, f.currencyScale()));
-        List<RuleResult> r = new ArrayList<>();
+    /** The approval rules, in a fixed order. Money thresholds are converted to minor units exactly. */
+    public List<PolicyRule> approvalRules(int currencyScale) {
+        List<PolicyRule> r = new ArrayList<>();
         if (requireActiveCustomer) {
-            r.add(new RuleResult("CUSTOMER_ACTIVE", "ACTIVE".equals(f.customerStatus()), f.customerStatus(), "ACTIVE"));
+            r.add(new PolicyRule("CUSTOMER_ACTIVE", PolicyRule.Input.CUSTOMER_STATUS, PolicyRule.Operator.EQ, "ACTIVE"));
         }
-        r.add(new RuleResult("PRINCIPAL_WITHIN_LIMIT", f.principalMinor() <= maxPrincipalMinor, f.principalMinor(),
-                maxPrincipalMinor));
-        r.add(new RuleResult("TERM_WITHIN_LIMIT", f.installmentCount() <= maxInstallments, f.installmentCount(),
-                maxInstallments));
-        r.add(new RuleResult("RATE_WITHIN_LIMIT", f.annualRateBps() <= maxAnnualRateBps, f.annualRateBps(),
-                maxAnnualRateBps));
+        r.add(new PolicyRule("PRINCIPAL_WITHIN_LIMIT", PolicyRule.Input.PRINCIPAL_MINOR, PolicyRule.Operator.LTE,
+                minor(maxPrincipalMajor, currencyScale)));
+        r.add(new PolicyRule("TERM_WITHIN_LIMIT", PolicyRule.Input.INSTALLMENT_COUNT, PolicyRule.Operator.LTE,
+                (long) maxInstallments));
+        r.add(new PolicyRule("RATE_WITHIN_LIMIT", PolicyRule.Input.ANNUAL_RATE_BPS, PolicyRule.Operator.LTE,
+                (long) maxAnnualRateBps));
         if (blockIfAnyObligationDefaulted) {
-            r.add(new RuleResult("NO_DEFAULTED_OBLIGATIONS", !f.anyObligationDefaulted(), f.anyObligationDefaulted(),
-                    false));
+            r.add(new PolicyRule("NO_DEFAULTED_OBLIGATIONS", PolicyRule.Input.ANY_EXISTING_OBLIGATION_DEFAULTED,
+                    PolicyRule.Operator.IS_FALSE, false));
         }
-        r.add(new RuleResult("EXISTING_DELINQUENCY_WITHIN_LIMIT", f.maxExistingDaysPastDue() <= maxExistingDaysPastDue,
-                f.maxExistingDaysPastDue(), maxExistingDaysPastDue));
+        r.add(new PolicyRule("EXISTING_DELINQUENCY_WITHIN_LIMIT", PolicyRule.Input.MAX_EXISTING_DAYS_PAST_DUE,
+                PolicyRule.Operator.LTE, maxExistingDaysPastDue));
+        if (minSettlementAvailableMajor != null) {
+            r.add(new PolicyRule("SETTLEMENT_AVAILABLE_AT_LEAST", PolicyRule.Input.SETTLEMENT_AVAILABLE_MINOR,
+                    PolicyRule.Operator.GTE, minor(minSettlementAvailableMajor, currencyScale)));
+        }
         return List.copyOf(r);
     }
 
-    public List<RuleResult> evaluateDefault(long daysPastDue) {
-        return List.of(new RuleResult("DEFAULT_THRESHOLD_MET", daysPastDue >= defaultDeclarationMinDaysPastDue,
-                daysPastDue, defaultDeclarationMinDaysPastDue));
+    public List<PolicyRule> defaultRules() {
+        return List.of(new PolicyRule("DEFAULT_THRESHOLD_MET", PolicyRule.Input.SUBJECT_DAYS_PAST_DUE,
+                PolicyRule.Operator.GTE, defaultDeclarationMinDaysPastDue));
+    }
+
+    public PolicyEngine.Evaluation evaluateApproval(DecisionFacts facts) {
+        return PolicyEngine.evaluate(approvalRules(facts.currencyScale()), facts);
+    }
+
+    public PolicyEngine.Evaluation evaluateDefault(long daysPastDue) {
+        return PolicyEngine.evaluate(defaultRules(),
+                new DecisionFacts(null, null, null, null, null, null, null, null, null, daysPastDue));
+    }
+
+    private static long minor(long major, int scale) {
+        return BigDecimal.valueOf(major).movePointRight(scale).longValueExact();
     }
 }

@@ -1,4 +1,4 @@
-# Bank 4.0 Core Financial System (research phases 1–5: ledger, banking domain, payments, lending, point-in-time history)
+# Bank 4.0 Core Financial System (research phases 1–6: ledger, banking domain, payments, lending, point-in-time history, counterfactual evaluation)
 
 A first-principles **research** core banking foundation built in **Java 21**, **Spring Boot**, and **PostgreSQL**.
 It is not production banking software; see [docs/ledger.md](docs/ledger.md) §10–12 for what is simplified and what is missing.
@@ -45,7 +45,7 @@ Bank 4.0 is designed as a living financial system. Consequential financial state
 - **Java 21+**: Strong type safety, records for immutable domain models, virtual threads, high-performance concurrency primitives.
 - **Spring Boot 3.x**: Production-ready REST framework, dependency injection, and declarative transaction management (`@Transactional`).
 - **PostgreSQL 16+**: System of record supporting ACID transactions, serializable isolation semantics, check constraints, JSONB audit structures, and deferred constraint triggers.
-- **Flyway**: Versioned, reproducible SQL migrations (`V1__reference_data.sql` through `V10__lending_history.sql`).
+- **Flyway**: Versioned, reproducible SQL migrations (`V1__reference_data.sql` through `V11__counterfactual_research.sql`).
 - **Modular Monolith**: Enforces strong domain boundaries (Platform, Customer, Deposit, Ledger, Payments) within a single compile-time target, leaving clear seams for future microservice extraction if needed.
 
 ---
@@ -102,6 +102,14 @@ See [docs/lending-history.md](docs/lending-history.md). Point-in-time: `asOf` = 
 - `POST /history/events/{eventId}/corrections`: Append a correction (never rewrites history)
 - `GET|POST /credit-policies`: Versioned credit rules (append-only, never retroactive)
 - Loan `approve`/`decline` accept `{"rationale", "evidence": {...}}`; every decision stores a hashed snapshot and cites its policy version
+
+### Counterfactual research (`/api/v1/research`)
+See [docs/counterfactual.md](docs/counterfactual.md). A research instrument: it reads the banking record and writes only immutable `research_*` records. It never changes a decision, outcome or policy, and never scores or recommends policies.
+- `POST /policies`: Publish a human-defined research policy version (never in force for live lending)
+- `POST /counterfactuals` `{decisionId, policyCode, policyVersion}`: What that policy would have decided, from the decision's verified snapshot only
+- `GET /counterfactuals/{id}/reproduction`: Recompute from the recorded input and compare hashes
+- `POST /policy-replays` `{label, decidedFrom, decidedTo, policyCode, policyVersion}`, `GET /policy-replays/{id}`: Actual vs counterfactual for a labelled population
+- `POST /policy-replays/{id}/outcome-evaluations` `{horizon, outcomeKnownAt}`: Observed outcomes (approved only), censoring, unknowable declined outcomes; causal conclusion always `NOT_ESTABLISHED`
 
 ### Payments (`/api/v1/payments`)
 See [docs/payments.md](docs/payments.md). Account-to-account movement exists only as a payment.

@@ -41,6 +41,8 @@ import com.wbank.customer.CustomerService;
 import com.wbank.customer.domain.Customer;
 import com.wbank.obligation.history.CreditPolicy;
 import com.wbank.obligation.history.CreditPolicyRules;
+import com.wbank.obligation.history.DecisionFacts;
+import com.wbank.obligation.history.PolicyEngine;
 import com.wbank.obligation.history.CreditPolicyService;
 import com.wbank.obligation.history.CreditDecisionSnapshot;
 import com.wbank.obligation.history.DecisionSnapshots;
@@ -218,7 +220,7 @@ public class LoanService {
         InvalidStateTransitionException.require(o.getStatus().canTransitionTo(ObligationStatus.APPROVED), "obligation",
                 obligationId, o.getStatus(), ObligationStatus.APPROVED);
         DecisionBasis basis = decisionBasis(o, LoanDecision.Kind.APPROVED);
-        List<CreditPolicyRules.RuleResult> failed = basis.results().stream().filter(r -> !r.passed()).toList();
+        List<PolicyEngine.RuleResult> failed = basis.results().stream().filter(r -> !r.passed()).toList();
         if (!failed.isEmpty()) {
             throw new BusinessRuleViolationException("loan.policy_not_met", "%s v%d not met: %s".formatted(
                     basis.policy().getPolicyCode(), basis.policy().getVersion(), failed.stream()
@@ -526,7 +528,7 @@ public class LoanService {
         accrueUpTo(o, requireTerms(obligationId), today, context);
         DecisionBasis basis = decisionBasis(o, LoanDecision.Kind.DEFAULT_DECLARED);
         Delinquency.Status s = delinquency(obligationId, today);
-        if (!basis.results().stream().allMatch(CreditPolicyRules.RuleResult::passed)) {
+        if (!basis.results().stream().allMatch(PolicyEngine.RuleResult::passed)) {
             throw new BusinessRuleViolationException("loan.default_threshold_not_met",
                     "Loan %s is %d days past due; %s v%d requires %s".formatted(o.getObligationNumber(),
                             s.daysPastDue(), basis.policy().getPolicyCode(), basis.policy().getVersion(),
@@ -733,7 +735,7 @@ public class LoanService {
 
     /** The policy in force at decision time, its rule results, and the facts they were evaluated on. */
     private record DecisionBasis(CreditPolicy policy, CreditPolicyRules rules,
-                                 List<CreditPolicyRules.RuleResult> results, Customer customer, Party party,
+                                 List<PolicyEngine.RuleResult> results, Customer customer, Party party,
                                  List<Map<String, Object>> existingObligations, Map<String, Object> subjectLoan) {}
 
     private DecisionBasis decisionBasis(Obligation o, LoanDecision.Kind kind) {
@@ -745,7 +747,7 @@ public class LoanService {
         Party party = parties.require(o.getDebtorPartyId());
         List<Map<String, Object>> existing = existingObligations(o, today);
         Map<String, Object> subjectLoan = null;
-        List<CreditPolicyRules.RuleResult> results;
+        List<PolicyEngine.RuleResult> results;
         if (kind == LoanDecision.Kind.DEFAULT_DECLARED) {
             Delinquency.Status s = delinquency(o.getId(), today);
             subjectLoan = new LinkedHashMap<>();
@@ -753,14 +755,16 @@ public class LoanService {
             subjectLoan.put("outstandingPrincipalMinor",
                     ledger.requireBalance(position.getLedgerAccountId()).getBalanceMinor());
             subjectLoan.put("delinquency", delinquencyMap(s));
-            results = rules.evaluateDefault(s.daysPastDue());
+            results = rules.evaluateDefault(s.daysPastDue()).results();
         } else {
             LoanTerms t = requireTerms(o.getId());
-            results = rules.evaluateApproval(new CreditPolicyRules.ApprovalFacts(customer.getStatus().name(),
-                    o.getPrincipalMinor(), currencies.require(o.getCurrencyCode()).minorUnit(),
-                    t.getInstallmentCount(), t.getAnnualRateBps(),
+            Long settlementAvailable = funds.balances(o.getSettlementAccountId()).availableMinor();
+            results = rules.evaluateApproval(new DecisionFacts(customer.getStatus().name(), o.getCurrencyCode(),
+                    currencies.require(o.getCurrencyCode()).minorUnit(), o.getPrincipalMinor(),
+                    (long) t.getInstallmentCount(), (long) t.getAnnualRateBps(),
                     existing.stream().anyMatch(e -> "DEFAULTED".equals(e.get("status"))),
-                    existing.stream().mapToLong(e -> (Long) e.get("daysPastDue")).max().orElse(0)));
+                    existing.stream().mapToLong(e -> (Long) e.get("daysPastDue")).max().orElse(0),
+                    settlementAvailable, null)).results();
         }
         return new DecisionBasis(policy, rules, results, customer, party, existing, subjectLoan);
     }
@@ -805,7 +809,7 @@ public class LoanService {
                         DecisionBasis basis, ObligationStatus from, OperationContext context) {
         Instant now = clock.instant();
         Map<String, String> supplied = suppliedEvidence == null ? Map.of() : new java.util.TreeMap<>(suppliedEvidence);
-        List<Map<String, Object>> ruleResults = basis.results().stream().map(CreditPolicyRules.RuleResult::asMap).toList();
+        List<Map<String, Object>> ruleResults = basis.results().stream().map(PolicyEngine.RuleResult::asMap).toList();
         Map<String, Object> decisionEvidence = new LinkedHashMap<>();
         decisionEvidence.put("ruleEvaluation", ruleResults);
         decisionEvidence.put("suppliedEvidence", supplied);

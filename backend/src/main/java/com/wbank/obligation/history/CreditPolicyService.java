@@ -37,7 +37,19 @@ public class CreditPolicyService {
 
     @Transactional(readOnly = true)
     public List<CreditPolicy> versions() {
-        return policies.findAllVersions(CreditPolicy.LENDING);
+        return versions(CreditPolicy.LENDING);
+    }
+
+    @Transactional(readOnly = true)
+    public List<CreditPolicy> versions(String policyCode) {
+        return policies.findAllVersions(policyCode);
+    }
+
+    @Transactional(readOnly = true)
+    public CreditPolicy require(String policyCode, int version) {
+        return policies.findById(new CreditPolicy.Key(policyCode, version)).orElseThrow(() ->
+                new com.wbank.platform.error.NotFoundException("credit_policy.not_found",
+                        "Credit policy %s v%d does not exist".formatted(policyCode, version)));
     }
 
     public CreditPolicyRules rules(CreditPolicy p) {
@@ -54,6 +66,19 @@ public class CreditPolicyService {
      */
     @Transactional
     public CreditPolicy publish(CreditPolicyRules rules, Instant effectiveFrom, String description) {
+        return publish(CreditPolicy.LENDING, rules, effectiveFrom, description);
+    }
+
+    /**
+     * Publishes a version under {@code policyCode}. Only {@value CreditPolicy#LENDING} is ever in
+     * force for live decisions; any other code is a research policy, used solely as the
+     * alternative in counterfactual evaluation. Versions of every code are append-only.
+     */
+    @Transactional
+    public CreditPolicy publish(String policyCode, CreditPolicyRules rules, Instant effectiveFrom, String description) {
+        if (policyCode == null || !policyCode.matches("^[A-Z][A-Z0-9_]{2,63}$")) {
+            throw new IllegalArgumentException("Policy code must be UPPER_SNAKE_CASE: " + policyCode);
+        }
         OperationContext context = RequestContext.forOperation("credit_policy.publish");
         Instant now = clock.instant();
         Instant effective = effectiveFrom == null ? now : effectiveFrom;
@@ -64,13 +89,13 @@ public class CreditPolicyService {
         if (description == null || description.isBlank()) {
             throw new IllegalArgumentException("A policy version needs a description");
         }
-        int next = versions().stream().mapToInt(CreditPolicy::getVersion).max().orElse(0) + 1;
+        int next = versions(policyCode).stream().mapToInt(CreditPolicy::getVersion).max().orElse(0) + 1;
         try {
-            CreditPolicy p = policies.saveAndFlush(CreditPolicy.publish(CreditPolicy.LENDING, next, effective,
+            CreditPolicy p = policies.saveAndFlush(CreditPolicy.publish(policyCode, next, effective,
                     json.writeValueAsString(rules), description.strip(), now, context.actor()));
             auditTrail.record("credit_policy.published", "credit_policy",
-                    UUID.nameUUIDFromBytes((CreditPolicy.LENDING + ":" + next).getBytes()), context,
-                    Map.of("version", next, "effectiveFrom", effective.toString()));
+                    UUID.nameUUIDFromBytes((policyCode + ":" + next).getBytes()), context,
+                    Map.of("policyCode", policyCode, "version", next, "effectiveFrom", effective.toString()));
             return p;
         } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
             throw new IllegalStateException(e);
