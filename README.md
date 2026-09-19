@@ -1,4 +1,4 @@
-# Bank 4.0 Core Financial System (research phases 1–7: ledger, banking domain, payments, lending, point-in-time history, counterfactual evaluation, credit information)
+# Bank 4.0 Core Financial System (research phases 1–8: ledger, banking domain, payments, lending, point-in-time history, counterfactual evaluation, credit information, outcome research)
 
 A first-principles **research** core banking foundation built in **Java 21**, **Spring Boot**, and **PostgreSQL**.
 It is not production banking software; see [docs/ledger.md](docs/ledger.md) §10–12 for what is simplified and what is missing.
@@ -45,7 +45,7 @@ Bank 4.0 is designed as a living financial system. Consequential financial state
 - **Java 21+**: Strong type safety, records for immutable domain models, virtual threads, high-performance concurrency primitives.
 - **Spring Boot 3.x**: Production-ready REST framework, dependency injection, and declarative transaction management (`@Transactional`).
 - **PostgreSQL 16+**: System of record supporting ACID transactions, serializable isolation semantics, check constraints, JSONB audit structures, and deferred constraint triggers.
-- **Flyway**: Versioned, reproducible SQL migrations (`V1__reference_data.sql` through `V12__credit_information.sql`).
+- **Flyway**: Versioned, reproducible SQL migrations (`V1__reference_data.sql` through `V13__outcome_research.sql`).
 - **Modular Monolith**: Enforces strong domain boundaries (Platform, Customer, Deposit, Ledger, Payments) within a single compile-time target, leaving clear seams for future microservice extraction if needed.
 
 ---
@@ -112,6 +112,13 @@ See [docs/counterfactual.md](docs/counterfactual.md). A research instrument: it 
 - `POST /policy-replays/{id}/outcome-evaluations` `{horizon, outcomeKnownAt}`: Observed outcomes (approved only), censoring, unknowable declined outcomes; causal conclusion always `NOT_ESTABLISHED`
 
 - `GET /information-report?label&decidedFrom&decidedTo[&knownAt]`: What the bank knew at each decision (income, obligations, completeness), plus a leakage experiment labelled `INVALID_FOR_RESEARCH`
+
+### Outcome research (`/api/v1/research`)
+See [docs/outcome-research.md](docs/outcome-research.md). Descriptive only: what was observed after decisions, within explicit horizons, knowledge cutoffs and censoring. No prediction, ranking, recommendation or causal claim; declined applicants' outcomes are never inferred; a counterfactual decision's outcome is always `UNOBSERVED`.
+- `POST /outcome-definitions`, `POST /cohorts`, `GET /cohorts/{code}/{version}/membership`
+- `GET /decisions/{id}/outcome`, `GET /decisions/{id}/outcome-timeline`
+- `POST /outcome-reports`, `GET /outcome-reports/{id}`, `GET /outcome-reports/{id}/reproduction`, `GET /cohorts/{code}/{version}/knowledge-comparison`
+- `POST /policy-replays/{id}/outcome-boundary`
 
 ### Credit information (`/api/v1`)
 See [docs/credit-information.md](docs/credit-information.md). Append-only, bitemporal borrower facts with provenance (DECLARED / VERIFIED; absent = UNKNOWN), and a deterministic affordability calculation that is INDETERMINATE when information is missing.
